@@ -334,6 +334,12 @@ button.li:hover,a.li:hover{background:var(--surface-2)}
 .srow .p.muted{color:var(--muted)}
 .srow .stk{text-align:right}
 .srow .mob{display:none}
+.slist.hist .shead,.slist.hist .srow{grid-template-columns:5px minmax(0,1fr) 120px 130px 170px}
+.datepick{display:inline-flex;align-items:center;gap:8px;font-size:14.5px;font-weight:620;color:var(--ink-2);white-space:nowrap}
+.datepick .ico{width:20px;height:20px;color:var(--muted)}
+.datepick .input{width:auto;min-width:160px}
+.banner.hist{background:var(--surface-3)}
+.banner.hist>.ico{color:var(--verre)}
 .sheet-sub{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:14.5px;margin-top:-4px}
 .bigstock{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding:12px 0 2px}
 .bigstock .n{font-size:46px;font-weight:820;font-stretch:118%;line-height:1;font-variant-numeric:tabular-nums}
@@ -539,6 +545,7 @@ button.li:hover,a.li:hover{background:var(--surface-2)}
 
   .slist .shead{display:none}
   .slist .srow{grid-template-columns:5px minmax(0,1fr) auto;padding-right:12px}
+  .slist.hist .srow{grid-template-columns:5px minmax(0,1fr) auto}
   .slist .srow:first-of-type{border-top:0}
   .srow .p{display:none}
   .srow .mob{display:block}
@@ -566,6 +573,8 @@ button.li:hover,a.li:hover{background:var(--surface-2)}
   .banner{flex-wrap:wrap;align-items:flex-start}
   .banner .grow{flex:1 1 calc(100% - 40px)}
   .banner>.btn{width:100%}
+  .banner>.row{width:100%}
+  .banner>.row .btn{flex:1}
 }
 @media (max-width:560px){
   .grid2{grid-template-columns:minmax(0,1fr)}
@@ -719,6 +728,7 @@ const ICONS = {
   phone: '<path d="M5 3.5h3.5l1.8 4.5-2.3 1.4a11 11 0 0 0 6.6 6.6l1.4-2.3 4.5 1.8V19a1.5 1.5 0 0 1-1.6 1.5A16.5 16.5 0 0 1 3.5 5.1 1.5 1.5 0 0 1 5 3.5z"/>',
   chev: '<path d="m9.5 6 6 6-6 6"/>',
   undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
+  calendar: '<rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
   file: '<path d="M6 2.5h8l4.5 4.5v14.5H6z"/><path d="M14 2.5V7h4.5M9 12h6M9 16h6"/>',
   share: '<circle cx="18" cy="5.5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="18.5" r="2.5"/><path d="M8.2 10.8l7.6-4.1M8.2 13.2l7.6 4.1"/>',
 };
@@ -864,11 +874,29 @@ function catOf(p) {
   const cats = S.settings.categories;
   return cats.find(c => c.id === (p && p.cat)) || cats.find(c => c.id === 'autres') || { id: 'autres', name: 'Autres', color: '#6B7A72' };
 }
-function stockStatus(p) {
-  const q = stockOf(p.id);
+function stockStatus(p, q) {
+  if (q === undefined) q = stockOf(p.id);
   if (q <= 0) return 'out';
   if (q <= (p.min || 0)) return 'low';
   return 'ok';
+}
+/* Stock à un moment passé : on rejoue tout ce qui a été enregistré avant `endISO`.
+   Une vente ou un achat annulé après ce moment comptait encore à cette date.
+   Le prix d'achat retenu est le dernier connu à cette date (achat, vente ou ajustement). */
+function stockAt(endISO) {
+  const qty = new Map(), cost = new Map(), when = new Map();
+  const live = r => r.date < endISO && (!r.cancelled || (r.cancelledAt || '') >= endISO);
+  const add = (pid, q) => qty.set(pid, (qty.get(pid) || 0) + q);
+  const price = (pid, c, d) => { if (c > 0 && (!when.has(pid) || d >= when.get(pid))) { cost.set(pid, c); when.set(pid, d); } };
+  for (const a of S.adjustments) if (a.date < endISO) { add(a.pid, a.qty); price(a.pid, a.cost, a.date); }
+  for (const pu of S.purchases) if (live(pu)) for (const l of pu.lines) { add(l.pid, l.qty); price(l.pid, l.cost, pu.date); }
+  for (const s of S.sales) if (live(s)) for (const l of s.lines) { add(l.pid, -l.qty); price(l.pid, l.cost, s.date); }
+  qty.forEach((v, k) => qty.set(k, round2(v)));
+  const products = S.products.filter(p => (p.created || '') < endISO && (!p.archived || Math.abs(qty.get(p.id) || 0) > 0.004));
+  const costOf = p => (cost.has(p.id) ? cost.get(p.id) : p.buy || 0);
+  let value = 0;
+  for (const p of products) value += Math.max(0, qty.get(p.id) || 0) * costOf(p);
+  return { qty, costOf, products, value: round2(value) };
 }
 function toReorder() {
   return activeProducts().filter(p => stockStatus(p) !== 'ok')
@@ -1399,8 +1427,9 @@ function render() {
 function refresh() { render(); reopenTop(); }
 
 /* ---------- Petits morceaux ---------- */
-function stockBadge(p) {
-  const q = stockOf(p.id), st = stockStatus(p);
+function stockBadge(p, q) {
+  if (q === undefined) q = stockOf(p.id);
+  const st = stockStatus(p, q);
   const cls = st === 'out' ? 'bad' : st === 'low' ? 'warn' : 'ok';
   return '<span class="badge ' + cls + '">' + esc(st === 'out' && q === 0 ? 'Rupture' : qtyU(q, p.unit)) + '</span>';
 }
@@ -1698,31 +1727,57 @@ function openSaleSheet(id, instant) {
 function viewStock(el) {
   setActions('<button type="button" class="btn" data-act="purchase-new" aria-label="Enregistrer un achat">' + icon('truck') + '<span>Enregistrer un achat</span></button>' +
     '<button type="button" class="btn primary" data-act="product-new" aria-label="Ajouter un produit">' + icon('plus') + '<span>Ajouter un produit</span></button>');
-  const act = activeProducts(), sv = stockValue();
-  const nLow = act.filter(p => stockStatus(p) !== 'ok').length, nOut = act.filter(p => stockStatus(p) === 'out').length;
-  el.innerHTML = '<div class="figures"><div class="figure"><div class="v">' + money(sv.buy) + '<small>' + esc(cur()) + '</small></div><div class="k">Valeur du stock au prix d\'achat</div></div>' +
-    '<div class="figure"><div class="v">' + act.length + '</div><div class="k">Produits</div></div>' +
-    '<div class="figure"><div class="v' + (nLow ? ' bad' : '') + '">' + nLow + '</div><div class="k">À commander</div></div></div>' +
+  const end = stockDateEnd(), H = end ? stockAt(end.toISOString()) : null, today = dayKey(new Date());
+  const list = H ? H.products : activeProducts(), qOf = p => (H ? H.qty.get(p.id) || 0 : stockOf(p.id));
+  const value = H ? H.value : stockValue().buy;
+  const nLow = list.filter(p => stockStatus(p, qOf(p)) !== 'ok').length, nOut = list.filter(p => stockStatus(p, qOf(p)) === 'out').length;
+  el.innerHTML = (H ? '<div class="banner hist">' + icon('calendar') + '<div class="grow"><strong>Stock à la fin du ' + esc(DF_LONGY.format(addDays(end, -1))) + '</strong>' +
+      '<p>Calculé à partir des ventes, achats et ajustements enregistrés jusqu\'à ce jour-là.</p></div>' +
+      '<div class="row"><button type="button" class="btn sm" data-act="csv-stock-date">' + icon('download') + '<span>Exporter vers Excel</span></button><button type="button" class="btn sm primary" data-act="stock-today">Revenir à aujourd\'hui</button></div></div>' : '') +
+    '<div class="figures"><div class="figure"><div class="v">' + money(value) + '<small>' + esc(cur()) + '</small></div><div class="k">' + (H ? 'Valeur du stock ce jour-là' : 'Valeur du stock au prix d\'achat') + '</div></div>' +
+    '<div class="figure"><div class="v">' + list.length + '</div><div class="k">Produits</div></div>' +
+    '<div class="figure"><div class="v' + (nLow ? ' bad' : '') + '">' + nLow + '</div><div class="k">' + (H ? 'Sous le seuil ce jour-là' : 'À commander') + '</div></div></div>' +
     '<div class="toolbar"><label class="search">' + icon('search') + '<span class="sr-only">Chercher un produit</span><input class="input" type="search" placeholder="Chercher un produit" value="' + esc(UI.stockQuery) + '" data-input="stockQuery" autocomplete="off"></label>' +
     '<div class="seg" role="group" aria-label="Filtrer">' +
       '<button type="button" data-act="stock-filter" data-val="all" aria-pressed="' + (UI.stockFilter === 'all') + '">Tous</button>' +
       '<button type="button" data-act="stock-filter" data-val="low" aria-pressed="' + (UI.stockFilter === 'low') + '">À commander' + (nLow ? ' <span class="cnt">' + nLow + '</span>' : '') + '</button>' +
-      '<button type="button" data-act="stock-filter" data-val="out" aria-pressed="' + (UI.stockFilter === 'out') + '">Rupture' + (nOut ? ' <span class="cnt">' + nOut + '</span>' : '') + '</button></div></div>' +
+      '<button type="button" data-act="stock-filter" data-val="out" aria-pressed="' + (UI.stockFilter === 'out') + '">Rupture' + (nOut ? ' <span class="cnt">' + nOut + '</span>' : '') + '</button></div>' +
+    '<label class="datepick">' + icon('calendar') + '<span>Stock au</span><input class="input" type="date" data-change="stock-date" value="' + (H ? UI.stockDate : today) + '" max="' + today + '"></label></div>' +
     '<div class="chips" role="group" aria-label="Catégories">' + catChipsHTML(UI.stockCat, 'stock-cat') + '</div><div class="panel slist" id="stock-list"></div>';
   renderStockList();
 }
+function stockDateEnd() {
+  if (!UI.stockDate || UI.stockDate >= dayKey(new Date())) return null;
+  const d = new Date(UI.stockDate + 'T00:00');
+  return isNaN(d) ? null : addDays(D0(d), 1);
+}
 function renderStockList() {
   const host = $('#stock-list'); if (!host) return;
-  if (!activeProducts().length) {
-    host.innerHTML = '<div class="empty"><strong>Aucun produit pour l\'instant</strong>Commencez par ajouter vos boissons et autres articles avec leur prix et la quantité en magasin.<br><button type="button" class="btn primary" data-act="product-new">' + icon('plus') + '<span>Ajouter un produit</span></button></div>';
+  const end = stockDateEnd(), H = end ? stockAt(end.toISOString()) : null;
+  const base = H ? H.products : activeProducts(), qOf = p => (H ? H.qty.get(p.id) || 0 : stockOf(p.id));
+  host.classList.toggle('hist', !!H);
+  if (!base.length) {
+    host.innerHTML = H ? '<div class="empty">Aucun produit n\'était encore enregistré à cette date.</div>'
+      : '<div class="empty"><strong>Aucun produit pour l\'instant</strong>Commencez par ajouter vos boissons et autres articles avec leur prix et la quantité en magasin.<br><button type="button" class="btn primary" data-act="product-new">' + icon('plus') + '<span>Ajouter un produit</span></button></div>';
     return;
   }
   const raw = UI.stockQuery.trim(), q = norm(raw);
-  let list = activeProducts().filter(p => (UI.stockCat === 'all' || p.cat === UI.stockCat) && (!q || norm(p.name).indexOf(q) >= 0 || (p.code && p.code.indexOf(raw) >= 0)));
-  if (UI.stockFilter === 'low') list = list.filter(p => stockStatus(p) !== 'ok');
-  else if (UI.stockFilter === 'out') list = list.filter(p => stockStatus(p) === 'out');
+  let list = base.filter(p => (UI.stockCat === 'all' || p.cat === UI.stockCat) && (!q || norm(p.name).indexOf(q) >= 0 || (p.code && p.code.indexOf(raw) >= 0)));
+  if (UI.stockFilter === 'low') list = list.filter(p => stockStatus(p, qOf(p)) !== 'ok');
+  else if (UI.stockFilter === 'out') list = list.filter(p => stockStatus(p, qOf(p)) === 'out');
   sortProducts(list);
   if (!list.length) { host.innerHTML = '<div class="empty">' + (UI.stockFilter === 'all' ? 'Aucun produit ne correspond.' : 'Aucun produit dans cette liste. Bonne nouvelle !') + '</div>'; return; }
+  if (H) {
+    host.innerHTML = '<div class="shead"><span></span><span>Produit</span><span class="r">Prix d\'achat</span><span class="r">Valeur</span><span class="r">Stock ce jour-là</span></div>' +
+      list.map(p => {
+        const c = catOf(p), qq = qOf(p), val = Math.max(0, qq) * H.costOf(p);
+        return '<button type="button" class="srow" data-act="product-open" data-id="' + p.id + '"><span class="bar" style="--c:' + c.color + '"></span>' +
+          '<span class="nm"><span class="t">' + esc(p.name) + '</span><span class="s">' + esc(c.name + (p.unit ? ', ' + p.unit : '') + (p.archived ? ', retiré depuis' : '')) + '</span>' +
+          '<span class="s mob">Valeur ' + esc(money(val)) + '</span></span>' +
+          '<span class="p">' + money(H.costOf(p)) + '</span><span class="p">' + money(val) + '</span><span class="stk">' + stockBadge(p, qq) + '</span></button>';
+      }).join('');
+    return;
+  }
   host.innerHTML = '<div class="shead"><span></span><span>Produit</span><span class="r">Prix d\'achat</span><span class="r">Prix détail</span><span class="r">Prix gros</span><span class="r">En stock</span></div>' +
     list.map(p => {
       const c = catOf(p);
@@ -2078,7 +2133,7 @@ function viewSettings(el) {
       (S.products.length ? '' : '<p class="prose">Chargez des produits et des ventes d\'exemple pour découvrir le logiciel.</p><div class="row" style="margin:12px 0 18px"><button type="button" class="btn" data-act="demo-load">Charger des exemples</button></div>') +
       '<p class="prose">« Tout effacer » supprime les produits, ventes, clients, achats et paiements de cet appareil. Les réglages du magasin sont conservés.</p>' +
       '<div class="row" style="margin-top:12px"><button type="button" class="btn danger" data-act="wipe">' + icon('trash') + '<span>Tout effacer</span></button></div>' +
-      '<p class="hint" style="margin-top:16px">Casier 1.1. Enregistrement : ' + (Store.mode === 'idb' ? 'base IndexedDB du navigateur' : Store.mode === 'local' ? 'localStorage du navigateur' : 'aucun, les données seront perdues à la fermeture') + '.</p></div></section>' +
+      '<p class="hint" style="margin-top:16px">Casier 1.2. Enregistrement : ' + (Store.mode === 'idb' ? 'base IndexedDB du navigateur' : Store.mode === 'local' ? 'localStorage du navigateur' : 'aucun, les données seront perdues à la fermeture') + '.</p></div></section>' +
     '</div>';
   showPersist();
 }
@@ -2141,6 +2196,7 @@ function route() {
   if (!S.settings) return;
   const h = parseHash();
   UI.route = ROUTES[h.path] ? h.path : 'accueil';
+  if (UI.route !== 'stock') UI.stockDate = '';
   if (UI.route === 'stock' && h.params.get('f')) { UI.stockFilter = h.params.get('f'); UI.stockCat = 'all'; UI.stockQuery = ''; }
   Modal.closeAll(); closeTicket();
   render();
@@ -2251,6 +2307,20 @@ INP.salesQuery = t => { UI.salesQuery = t.value; UI.salesLimit = 120; renderSale
 /* ---------- Stock ---------- */
 ACT['stock-filter'] = t => { UI.stockFilter = t.dataset.val; pressSeg(t); renderStockList(); };
 ACT['stock-cat'] = t => { UI.stockCat = t.dataset.val; pressSeg(t); renderStockList(); };
+CHG['stock-date'] = t => { UI.stockDate = t.value || ''; render(); };
+ACT['stock-today'] = () => { UI.stockDate = ''; render(); };
+ACT['csv-stock-date'] = () => {
+  const end = stockDateEnd(); if (!end) return;
+  const H = stockAt(end.toISOString()), day = addDays(end, -1);
+  const rows = [['Produit', 'Catégorie', 'Vendu par', 'Stock au ' + fDate(day), 'Prix d\'achat ce jour-là', 'Valeur au prix d\'achat']];
+  sortProducts(H.products.slice()).forEach(p => {
+    const q = H.qty.get(p.id) || 0;
+    rows.push([p.name + (p.archived ? ' (retiré depuis)' : ''), catOf(p).name, p.unit, q, H.costOf(p), round2(Math.max(0, q) * H.costOf(p))]);
+  });
+  rows.push(['Total', '', '', '', '', H.value]);
+  download('casier-stock-au-' + dayKey(day) + '.csv', csv(rows), 'text/csv;charset=utf-8');
+  toast('Stock au ' + fDate(day) + ' téléchargé');
+};
 ACT['product-new'] = () => openProductForm(null);
 ACT['product-open'] = t => openProductSheet(t.dataset.id);
 ACT['product-edit'] = t => openProductForm(t.dataset.id);

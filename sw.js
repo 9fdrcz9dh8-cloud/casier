@@ -1,5 +1,5 @@
-/* Casier 1.1.0 : garde l'application disponible sans internet. */
-const CACHE = 'casier-1.1.0-202611010622';
+/* Casier 1.2.0 : garde l'application disponible sans internet. */
+const CACHE = 'casier-1.2.0-202611010922';
 const FILES = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', event => {
