@@ -1,5 +1,5 @@
-/* Casier 1.2.0 : garde l'application disponible sans internet. */
-const CACHE = 'casier-1.2.0-202611010922';
+/* Casier 2.0.0 : garde l'application disponible sans internet. */
+const CACHE = 'casier-2.0.0-202611020708';
 const FILES = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', event => {
@@ -14,7 +14,8 @@ self.addEventListener('activate', event => {
     .then(() => self.clients.claim()));
 });
 
-// Réponse immédiate depuis le cache, puis mise à jour en arrière-plan quand internet est disponible.
+// Les fichiers de l'application viennent du cache, puis se mettent à jour en arrière-plan.
+// Les échanges avec la base de données (autres adresses) ne passent pas par ici.
 self.addEventListener('fetch', event => {
   const req = event.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
