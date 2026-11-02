@@ -2,7 +2,7 @@
   "id": "./",
   "name": "Casier – stock et caisse",
   "short_name": "Casier",
-  "description": "Stock, caisse, crédits clients et rapports pour magasin de boissons. Fonctionne sans internet.",
+  "description": "Stock, caisse, crédits clients et rapports, partagés entre le patron et les employés de plusieurs magasins.",
   "lang": "fr",
   "dir": "ltr",
   "start_url": "./",
@@ -33,22 +33,6 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
-    }
-  ],
-  "screenshots": [
-    {
-      "src": "capture-telephone.png",
-      "sizes": "780x1688",
-      "type": "image/png",
-      "form_factor": "narrow",
-      "label": "La caisse sur téléphone"
-    },
-    {
-      "src": "capture-ordinateur.png",
-      "sizes": "1366x820",
-      "type": "image/png",
-      "form_factor": "wide",
-      "label": "La caisse sur ordinateur"
     }
   ]
 }
